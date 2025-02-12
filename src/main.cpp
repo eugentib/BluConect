@@ -1,111 +1,73 @@
+#include <Arduino.h>
 #include <ESP8266WiFi.h>
-#include <ESPAsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <ESPAsyncDNSServer.h>
 #include <LittleFS.h>
-#include <ArduinoOTA.h>
-#include <ESPAsync_WiFiManager.h> // Biblioteca ESPAsync_WiFiManager
 
-#define USE_LITTLEFS true
+#include "config.h"
+#include "web.h"
+#include "mqtt.h"
+#include "serial.h"
+#include "ota.h"
 
-AsyncWebServer server(80);
-AsyncWebSocket ws("/ws");
+// Setările implicite pentru WiFi (poți extinde și aici după necesități)
+const char* ssid     = "numele_retelei";
+const char* password = "parola_retelei";
 
-void handleWebSocketMessage(AsyncWebSocketClient *client, uint8_t *data, size_t len);
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("\n--- Start ESP8266 Project ---");
 
-void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
-               AwsEventType type, void *arg, uint8_t *data, size_t len)
-{
-    if (type == WS_EVT_CONNECT)
-    {
-        Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
-    }
-    else if (type == WS_EVT_DISCONNECT)
-    {
-        Serial.printf("WebSocket client #%u disconnected\n", client->id());
-    }
-    else if (type == WS_EVT_DATA)
-    {
-        handleWebSocketMessage(client, data, len);
-    }
+  // Inițializare LittleFS
+  if (!LittleFS.begin()) {
+    Serial.println("Eroare la montarea LittleFS!");
+    return;
+  }
+  
+  // Încărcăm setările din fișierul de configurare
+  if (!loadSettings(settings)) {
+    Serial.println("Nu s-au găsit setări, se folosesc valorile implicite.");
+    // Setări implicite pentru MQTT:
+    strncpy(settings.mqttServer, "broker.example.com", sizeof(settings.mqttServer));
+    settings.mqttPort = 1883;
+    // Salvăm valorile implicite pentru viitoarele restartări
+    saveSettings(settings);
+  }
+  Serial.print("MQTT server: ");
+  Serial.println(settings.mqttServer);
+  Serial.print("MQTT port: ");
+  Serial.println(settings.mqttPort);
+
+  // Conectare la rețeaua WiFi
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  Serial.print("Conectare la WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("Conectat, IP: ");
+  Serial.println(WiFi.localIP());
+
+  // Inițializare serverul web (include ruta pentru setări)
+  initWebServer();
+  
+  // Inițializare client MQTT cu parametrii din setări
+  initMQTT(settings.mqttServer, settings.mqttPort);
+  
+  // Inițializare adaptor Serial-TCP
+  initSerialTCP(23); // Exemplu de port TCP, poate fi configurabil și el
+  
+  // Inițializare OTA
+  initOTA();
 }
 
-void handleWebSocketMessage(AsyncWebSocketClient *client, uint8_t *data, size_t len)
-{
-    char msg[len + 1];
-    strncpy(msg, (char *)data, len);
-    msg[len] = '\0';
-
-    if (strncmp(msg, "SET_BAUD_RATE:", 14) == 0)
-    {
-        long baudRate = strtol(msg + 14, NULL, 10);
-        if (baudRate > 0)
-        {
-            Serial.begin(baudRate);
-            Serial.printf("Viteza portului serial setată la %ld\n", baudRate);
-        }
-    }
-    else
-    {
-        Serial.println(msg);
-    }
-}
-
-void setup()
-{
-    Serial.begin(115200);
-
-    if (!LittleFS.begin())
-    {
-        Serial.println("Eroare la inițializarea LittleFS");
-        return;
-    }
-
-    // Configurare ESPAsync_WiFiManager
-    ESPAsync_WiFiManager wifiManager(&server, NULL, "AutoConnect-FSParams");
-    wifiManager.autoConnect("ESPAsync");
-
-    ws.onEvent(onWsEvent);
-    server.addHandler(&ws);
-
-    server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
-
-    server.begin();
-
-    // Configurare OTA
-    ArduinoOTA.onStart([]()
-                       {
-        String type;
-        if (ArduinoOTA.getCommand() == U_FLASH) {
-            type = "firmware";
-        } else { // U_SPIFFS
-            type = "filesystem";
-        }
-        // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-        Serial.println("Start updating " + type); });
-    ArduinoOTA.onEnd([]()
-                     { Serial.println("\nEnd"); });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
-                          { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
-    ArduinoOTA.onError([](ota_error_t error)
-                       {
-        Serial.printf("Error[%u]: ", error);
-        if (error == OTA_AUTH_ERROR) {
-            Serial.println("Auth Failed");
-        } else if (error == OTA_BEGIN_ERROR) {
-            Serial.println("Begin Failed");
-        } else if (error == OTA_CONNECT_ERROR) {
-            Serial.println("Connect Failed");
-        } else if (error == OTA_RECEIVE_ERROR) {
-            Serial.println("Receive Failed");
-        } else if (error == OTA_END_ERROR) {
-            Serial.println("End Failed");
-        } });
-    ArduinoOTA.begin();
-    Serial.println("OTA ready");
-}
-
-void loop()
-{
-    ArduinoOTA.handle();
+void loop() {
+  // Gestionăm datele de la Serial (le trimitem către clienții TCP)
+  handleSerialData();
+  
+  // Verificăm dacă s-a solicitat un update OTA
+  checkOTAUpdate();
+  
+  // Alte task-uri pot fi adăugate aici...
 }
