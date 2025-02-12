@@ -11,6 +11,6 @@ void initSerialTCP(uint16_t port);
 void handleSerialData();
 
 // Funcție utilă pentru transmiterea datelor către toți clienții TCP
-void sendToTCPClients(const uint8_t* data, size_t len);
+void sendToTCPClients(uint8_t* data, size_t len);
 
 #endif

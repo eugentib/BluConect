@@ -47,11 +47,11 @@ void handleSerialData() {
   }
 }
 
-void sendToTCPClients(const uint8_t* data, size_t len) {
+void sendToTCPClients(uint8_t* data, size_t len) {
   // Trimite datele către toți clienții conectați
   for (auto client : tcpClients) {
     if (client->canSend()) {
-      client->write(data, len);
+      client->write((const char*)data, len);
     }
   }
 }
